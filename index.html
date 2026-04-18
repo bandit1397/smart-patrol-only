@@ -1,0 +1,781 @@
+  <!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<title>특정 poi 기반 출동/순찰 시스템 (Leaflet)</title>
+<meta http-equiv="refresh" content="300">
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+<style>
+  body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f9f9f9; }
+  h3 { text-align: center; background: #007bff; color: white; margin: 0; padding: 10px; }
+  #panel { padding: 10px; text-align: center; max-width: 400px; margin: 10px auto; }
+  #panel input, #panel button { width: 90%; max-width: 350px; padding: 10px; margin: 5px auto; font-size: 16px; display: block; border: 1px solid #ccc; border-radius: 5px; }
+  #map { height: 70vh; width: 100%; }
+  #clickedCoords { width: 90%; max-width: 350px; padding: 8px; margin: 5px auto; border: 1px solid #007bff; background: #eef6ff; font-size: 14px; border-radius: 5px; text-align: center; }
+  #copyRouteBtn { width: 90%; max-width: 350px; background: #ff9800; color: white; border: none; padding: 8px; border-radius: 5px; cursor: pointer; }
+  #completeBtn { background: #28a745; color: white; border: none; padding: 10px; border-radius: 5px; font-size: 16px; cursor: pointer; width: 90%; max-width: 350px; margin: 10px auto; display: block; }
+  #navigateBtn { background:#007bff; color:white; border:none; padding:10px; border-radius:5px; font-size:16px; cursor:pointer; width:90%; max-width:350px; margin:10px auto; display:block; }
+  #upcomingPanel { position: fixed; top: 10px; right: 10px; width: 250px; max-height: 60vh; overflow-y: auto; background: rgba(255,255,255,0.95); border: 1px solid #007bff; border-radius: 5px; padding: 10px; font-size: 14px; z-index: 9999; box-shadow: 2px 2px 5px rgba(0,0,0,0.2); transition: all 0.3s ease; cursor: pointer; }
+  #upcomingPanel h4 { margin: 0 0 5px; font-size: 16px; color: #007bff; }
+  #upcomingList { list-style: none; padding: 0; margin: 0; }
+  #upcomingList li { padding: 5px 8px; border-bottom: 1px solid #ddd; cursor: pointer; border-radius: 3px; user-select: none; }
+  #upcomingList li:hover { background: #eef6ff; }
+  #upcomingPanel.hidden { width: 50px; height: 40px; padding: 5px; overflow: hidden; cursor: pointer; }
+  #upcomingPanel.hidden h4, #upcomingPanel.hidden ul { display: none; }
+  #upcomingPanel.hidden::after { content: "⏰"; position: absolute; top: 10px; left: 15px; font-size: 20px; color: #007bff; }
+  .gpx-original-hidden { opacity: 0 !important; pointer-events: none !important; }
+</style>
+<script src="lampData.js"></script>
+<script src="patrolSchedule.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet-gpx@1.7.0/gpx.js"></script>
+
+</head>
+<body>
+<h3>🚓 함께 만드는 순찰/출동 poi(신정2)</h3>
+
+<div id="panel">
+  <label>순찰카테고리:</label>
+  <ul id="categoryList" style="list-style:none; padding:0; margin:5px auto; max-width:200px; display:flex; justify-content:center; gap:10px;">
+    <li data-cat="안전조치" style="padding:5px 12px; border:1px solid #007bff; border-radius:5px; cursor:pointer; background:#007bff; color:white;">안전조치</li>
+    <li data-cat="?" style="padding:5px 12px; border:1px solid #007bff; border-radius:5px; cursor:pointer; background:#007bff; color:white;">?</li>
+  </ul>
+  <input type="text" id="keyword" placeholder="키워드입력(예:안양천 9-2, 공중전화, 안전조치 등)" />
+  <div style="display:flex; justify-content:center; gap:5px; max-width:350px; margin:5px auto;">
+    <button onclick="searchAndShow()">검색</button>
+    <button onclick="resetSearch()">초기화</button>
+  </div>
+
+  <!-- 클릭 좌표 영역 -->
+  <div style="display:flex; align-items:center; justify-content:center; gap:5px; max-width:350px; margin:5px auto;">
+    <div id="clickedCoords">📍</div>
+    <button id="copyRouteBtn">📋 위치 url 복사</button>
+  </div>
+
+  <!-- 순찰완료, 순찰로그, 길찾기 버튼 한 줄 -->
+  <div style="display:flex; flex-direction:row; justify-content:center; gap:5px; max-width:350px; margin:10px auto;">
+  <button id="completeBtn" onclick="completePatrol()" style="flex:1; background:#28a745; color:white; border:none; padding:10px; border-radius:5px; font-size:14px; cursor:pointer;">✅ 순찰 완료</button>
+  <button id="logBtn" onclick="toggleLogViewer()" style="flex:1; background:#ffc107; color:white; border:none; padding:10px; border-radius:5px; font-size:14px; cursor:pointer;">📋 순찰 로그</button>
+  <button id="navigateBtn" onclick="navigateToPatrol()" style="flex:1; background:#007bff; color:white; border:none; padding:10px; border-radius:5px; font-size:14px; cursor:pointer;">📍 길찾기</button>
+  </div>
+
+  <!-- 로그 textarea -->
+  <textarea id="logContent" readonly
+    style="width:100%; height:150px; font-size:14px; padding:5px; border:1px solid #007bff; border-radius:5px; display:none; margin-top:5px;">
+  </textarea>
+</div>
+
+
+<div id="upcomingPanel">
+  <h4>⏰ 순찰 후 순찰완료 요망</h4>
+  <ul id="upcomingList"></ul>
+</div>
+  
+<div id="map"></div>
+
+<script>
+let activeCategories = ["안전조치"];
+let activePatrol = null;
+let lastClickedCoord = "";
+let map, markers = [], markerCluster;
+let searchMode = false;
+let completedPatrols = new Set(JSON.parse(localStorage.getItem("patrol_" + new Date().toISOString().slice(0,10)) || "[]"));
+let lastClickedMarker = null;
+
+const ROUTE_GPX_FILES = [
+  "routes/patrol_2025-11-24_minimal.gpx",
+   "routes/merged.gpx",
+  "routes/merged_leaflet.gpx",
+  "routes/yongwangsan_minimal.gpx",
+  "routes/galsan_minimal.gpx",
+];
+let gpxLayerGroup; // GPX 레이어 묶음
+
+let gpxWptIndex = [];        // { name, marker } 목록 (GPX의 모든 wpt 마커)
+let highlightedGpxWpts = []; // 검색으로 색상 변경된 wpt 마커들 (원복용)
+
+let gpxNewWptLayerGroup;   // ✅ 새로 만든 WPT 마커만 모아두는 레이어
+let gpxNewWptIndex = [];   // ✅ 검색/색변화는 이 인덱스만 사용
+ 
+function setActiveCategories(selectedCategories){
+  activeCategories = selectedCategories.filter(cat => patrolSchedules.hasOwnProperty(cat));
+  updatePatrolDisplay();
+}
+
+document.querySelectorAll("#categoryList li").forEach(li=>{
+  li.addEventListener("click", ()=>{
+    const cat = li.getAttribute("data-cat");
+    if(activeCategories.includes(cat)){
+      activeCategories = activeCategories.filter(c=>c!==cat);
+      li.style.background="white"; li.style.color="#007bff"; li.style.border="1px solid #007bff";
+    } else {
+      activeCategories.push(cat);
+      li.style.background="#007bff"; li.style.color="white"; li.style.border="1px solid #007bff";
+    }
+    updatePatrolDisplay();
+  });
+});
+
+function getActivePatrolSchedule(){
+  let combined=[];
+  activeCategories.forEach(cat=>{ if(patrolSchedules[cat]) combined=combined.concat(patrolSchedules[cat]); });
+  return combined;
+}
+
+function updatePatrolDisplay(){ showUpcomingPatrols(); }
+
+function parseCoords(s){ const[a,b]=s.split(",").map(Number); return{lat:a,lng:b}; }
+function pad(n){ return n.toString().padStart(2,"0"); }
+
+function showUpcomingPatrols(){
+  const now = new Date(), nowM = now.getHours()*60 + now.getMinutes();
+  const list = document.getElementById("upcomingList"); 
+  list.innerHTML = "";
+  const upcoming = [];
+  const patrolSchedule = getActivePatrolSchedule();
+
+  patrolSchedule.forEach(task=>{
+    // ✅ 날짜 비교 (UTC 보정)
+    const todayStr = now.toISOString().slice(0,10);
+    const todayDate = new Date(todayStr + "T00:00:00");
+    const startDate = new Date(task.startDate + "T00:00:00");
+    const endDate   = new Date(task.endDate + "T23:59:59"); // 종료일 포함
+
+    if (!(todayDate >= startDate && todayDate <= endDate)) return;
+
+    // 요일 조건
+    if (!task.daysOfWeek.includes(now.getDay())) return;
+
+    // 시간 조건
+    task.timeRanges.forEach(r=>{
+      const [sH,sM] = r.start.split(":").map(Number);
+      const [eH,eM] = r.end.split(":").map(Number);
+      const startM = sH*60 + sM - 30;
+      const endM   = eH*60 + eM + 30;
+      const isOngoing = nowM >= sH*60 + sM && nowM <= eH*60 + eM;
+      const isInWindow = nowM >= startM && nowM <= endM;
+      const patrolKey = `${task.id}|${r.start}~${r.end}`;
+
+      if (isInWindow && !completedPatrols.has(patrolKey)) {
+        upcoming.push({
+          task, hour:sH, minute:sM, 
+          endHour:eH, endMinute:eM, 
+          key:patrolKey, isInTime:isOngoing
+        });
+      }
+    });
+  });
+
+  if (upcoming.length===0){ 
+    list.innerHTML="<li>✅ 예정 없음</li>"; 
+    return; 
+  }
+
+  upcoming.sort((a,b)=>(a.hour*60+a.minute)-(b.hour*60+b.minute));
+  upcoming.forEach(item=>{
+    const li=document.createElement("li");
+    li.style.color = item.isInTime ? "blue" : "black";
+    li.textContent = `${item.task.id} - ${pad(item.hour)}:${pad(item.minute)}~${pad(item.endHour)}:${pad(item.endMinute)}`;
+    li.onclick = () => {
+      activePatrol = {task:item.task,hour:item.hour,minute:item.minute,key:item.key};
+      const id = item.task.id;
+      if (!lampData[id]) {
+        alert("해당 ID의 좌표 정보가 없습니다.");
+        return;
+      }
+      const pos = parseCoords(lampData[id].좌표);
+
+      if (confirm("📍 순찰 길찾기를 실행하시겠습니까?\n(확인 시 바로 카카오맵 실행 + 순찰완료 처리)")) {
+        // ✅ 순찰 완료 먼저 처리
+        completePatrol();
+
+        // ✅ 팝업 없이 바로 카카오맵 열기
+        const kakaoUrl = `https://map.kakao.com/link/to/${encodeURIComponent(item.task.id)},${pos.lat},${pos.lng}`;
+        const popup = window.open(kakaoUrl, "_blank");
+
+        // ✅ 팝업 닫힘 감지 → 즉시 초기화면 복귀
+        const checkPopup = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(checkPopup);
+            resetSearch(); // 지도 초기화
+            updatePatrolDisplay(); // 예정 목록 갱신
+          }
+        }, 500);
+      }
+    };
+    list.appendChild(li);
+  });
+}
+
+
+function initMap(){
+  map = L.map('map').setView([37.3857,126.6586], 15);
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19
+  }).addTo(map);
+
+  markerCluster = L.markerClusterGroup();
+  map.addLayer(markerCluster);
+
+  gpxLayerGroup = L.layerGroup().addTo(map);
+
+  gpxNewWptLayerGroup = L.layerGroup().addTo(map);
+
+  // ✅ routes/ 의 GPX 파일들을 지도에 트랙으로 표시
+  ROUTE_GPX_FILES.forEach((url) => {
+    new L.GPX(url, {
+      async: true,
+      polyline_options: {
+        color: "#ff0000",
+        weight: 4,
+        opacity: 0.85
+      },
+      marker_options: {
+        startIconUrl: null,
+        endIconUrl: null,
+        shadowUrl: null,
+        wptIconUrls: {
+          "": "https://maps.google.com/mapfiles/ms/icons/blue-dot.png"
+        }
+      }
+    })
+
+    /* ✅✅ 여기부터 교체 */
+      .on("loaded", function (e) {
+      const gpx = e.target;
+
+      // ✅ gpx 내부(중첩 포함) 모든 마커를 재귀로 찾아 숨김
+      function hideAllGpxMarkers(layer) {
+        if (!layer) return;
+
+        // 1) 마커면 숨김
+        if (layer instanceof L.Marker) {
+          layer.setOpacity(0);
+          layer.options.interactive = false;
+          if (layer._icon) layer._icon.style.pointerEvents = "none";
+
+          // DOM 늦게 생기는 경우까지 보험
+          layer.on("add", () => {
+            layer.setOpacity(0);
+            layer.options.interactive = false;
+            if (layer._icon) layer._icon.style.pointerEvents = "none";
+            const el = layer.getElement && layer.getElement();
+            if (el) el.classList.add("gpx-original-hidden");
+          });
+          return;
+        }
+
+        // 2) 그룹/피처그룹이면 안쪽도 전부 반복
+        if (layer.eachLayer) {
+          layer.eachLayer(child => hideAllGpxMarkers(child));
+        }
+      }
+
+
+      // ✅ WPT 이름을 "최대한 많이" 건져오는 헬퍼 (leaflet-gpx 버전/구조 차이 대응)
+      function extractNameFromMarker(marker) {
+        if (!marker) return "";
+
+        const popupContent =
+          (marker.getPopup && marker.getPopup() && marker.getPopup().getContent()) || "";
+        const popupText = String(popupContent).replace(/<[^>]*>/g, "").trim();
+
+        const tooltipContent =
+          (marker.getTooltip && marker.getTooltip() && marker.getTooltip().getContent()) || "";
+        const tooltipText = String(tooltipContent).replace(/<[^>]*>/g, "").trim();
+
+        const fromFeature =
+          (marker.feature &&
+            marker.feature.properties &&
+            (marker.feature.properties.name ||
+              marker.feature.properties.desc ||
+              marker.feature.properties.cmt)) || "";
+
+        return String(
+          marker._name ||
+          marker.options?.title ||
+          fromFeature ||
+          tooltipText ||
+          popupText ||
+          ""
+        ).trim();
+      }
+
+      const blueIcon = L.icon({
+        iconUrl: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png",
+        iconSize: [32, 32]
+      });
+
+      // ✅ 중복 방지용 Set (name + lat,lng)
+      function makeKey(name, lat, lng) {
+        return `${String(name || "").trim()}|${Number(lat).toFixed(6)},${Number(lng).toFixed(6)}`;
+      }
+
+      const existed = new Set(
+        gpxWptIndex
+          .filter(x => x && x.marker && x.marker.getLatLng)
+          .map(x => {
+            const ll = x.marker.getLatLng();
+            return makeKey(x.name, ll.lat, ll.lng);
+          })
+      );
+
+      // ✅ 0) 먼저 현재 gpx 레이어에서 "마커들"을 lat,lng로 맵핑(나중에 XML name 붙이기용)
+      // ✅ 0) gpx 내부(중첩 포함) 모든 레이어를 재귀로 훑어서
+      //    - 마커는 markerByLatLng에 등록
+      //    - 기존 leaflet-gpx 마커는 "완전 숨김" 처리
+      const markerByLatLng = new Map();
+
+      function processLayerRecursive(layer) {
+        if (!layer) return;
+
+        // 1) 마커면: 인덱싱 + 숨김
+        if (layer instanceof L.Marker) {
+          const ll = layer.getLatLng();
+
+          // ✅ markerByLatLng 등록
+          markerByLatLng.set(`${ll.lat.toFixed(6)},${ll.lng.toFixed(6)}`, layer);
+
+          // ✅ (핵심) 기존 leaflet-gpx 마커 "완전 숨김"
+          layer.setOpacity(0);                 // 화면에서 100% 안 보이게
+          layer.options.interactive = false;   // 클릭/터치 막기
+          if (layer._icon) layer._icon.style.pointerEvents = "none";
+
+          // ✅ DOM이 늦게 생기는 경우까지 커버(보험)
+          layer.on("add", () => {
+            layer.setOpacity(0);
+            layer.options.interactive = false;
+            if (layer._icon) layer._icon.style.pointerEvents = "none";
+            const el = layer.getElement && layer.getElement();
+            if (el) el.classList.add("gpx-original-hidden");
+          });
+
+          // (선택) 기존 인덱싱 로직 유지: name 추출해서 gpxWptIndex에도 넣기
+          const n = extractNameFromMarker(layer);
+          if (n) {
+            const k = makeKey(n, ll.lat, ll.lng);
+            if (!existed.has(k)) {
+              existed.add(k);
+              gpxWptIndex.push({ name: n, marker: layer });
+            }
+          }
+
+          return; // ✅ 마커는 여기서 끝
+        }
+
+        // 2) 그룹/GeoJSON/FeatureGroup 등: 하위 레이어 재귀 처리
+        if (typeof layer.eachLayer === "function") {
+          layer.eachLayer(child => processLayerRecursive(child));
+        }
+      }
+
+      // ✅ 실행: gpx 내부(중첩 포함) 전부 처리
+      processLayerRecursive(gpx);
+
+      // ✅ (보험) 로딩/렌더 타이밍 늦는 브라우저에서 한 번 더 숨김 적용
+      setTimeout(() => processLayerRecursive(gpx), 0);
+      setTimeout(() => processLayerRecursive(gpx), 200);
+
+
+      // ✅ 근처 마커 찾기 (좌표가 완전히 같지 않아도 매칭)
+      function findNearestMarker(lat, lon) {
+        const targetLat = Number(lat);
+        const targetLon = Number(lon);
+
+        let best = null;
+        let bestDist = Infinity;
+
+        markerByLatLng.forEach((m) => {
+          if (!(m instanceof L.Marker)) return;
+          const ll = m.getLatLng();
+          const dLat = ll.lat - targetLat;
+          const dLon = ll.lng - targetLon;
+          const dist = dLat*dLat + dLon*dLon;
+
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = m;
+          }
+        });
+
+        // 약 수 m 이내면 같은 WPT로 간주
+        return bestDist < 1e-8 ? best : null;
+      }
+
+
+      // ✅ 1) get_waypoints()가 있으면 거기서도 시도
+      if (typeof gpx.get_waypoints === "function") {
+        const wpts = gpx.get_waypoints() || [];
+        wpts.forEach(w => {
+          const marker = w && (w.marker || w._marker || w);
+          if (!(marker instanceof L.Marker)) return;
+
+          const ll = marker.getLatLng();
+          const name = String(
+            (w && (w.name || w.desc || w.cmt || w.text)) ||
+            extractNameFromMarker(marker) ||
+            ""
+          ).trim();
+
+          if (!name) return;
+
+          const k = makeKey(name, ll.lat, ll.lng);
+          if (!existed.has(k)) {
+          existed.add(k);
+            gpxWptIndex.push({ name, marker });
+          }
+        });
+      }
+
+      // ✅ 2) ★핵심★ GPX 원문(XML)을 직접 파싱해서 <wpt><name>을 확실히 인덱싱
+      // ✅ url은 forEach((url)=>{ ... })의 스코프 변수
+      fetch(url)
+        .then(r => r.text())
+        .then(xmlText => {
+          const parser = new DOMParser();
+          const xml = parser.parseFromString(xmlText, "application/xml");
+          if (xml.querySelector("parsererror")) return;
+
+          const wpts = Array.from(xml.getElementsByTagName("wpt"));
+
+          wpts.forEach(wpt => {
+            const lat = wpt.getAttribute("lat");
+            const lon = wpt.getAttribute("lon");
+            if (!lat || !lon) return;
+
+            const nameEl = wpt.getElementsByTagName("name")[0];
+            const name = String(nameEl ? nameEl.textContent : "").trim();
+            if (!name) return;
+
+            const latNum = Number(lat);
+            const lonNum = Number(lon);
+
+            const marker = L.marker([latNum, lonNum], { icon: blueIcon });
+
+            marker.bindTooltip(name, { direction: "top", offset: [0, -8] });
+
+            marker.on("click", () => {
+              const ll = marker.getLatLng();
+
+              // ✅ lampData 마커와 동일한 방식으로 좌표 세팅
+              lastClickedCoord = `${ll.lat.toFixed(6)},${ll.lng.toFixed(6)}`;
+              document.getElementById("clickedCoords").innerText =
+                `📍 선택: ${lastClickedCoord}`;
+
+              // ✅ 선택된 GPX WPT 시각적 강조 (lampData와 동일 개념)
+              const selectedIcon = L.icon({
+                iconUrl: "https://maps.google.com/mapfiles/ms/icons/orange-dot.png",
+                iconSize: [32, 32]
+              });
+
+              // 이전에 클릭된 마커가 있으면 원래 아이콘으로 복원
+              if (lastClickedMarker && lastClickedMarker !== marker) {
+                lastClickedMarker.setIcon(
+                  lastClickedMarker._defaultIcon || blueIcon
+                );
+              }
+
+              // 현재 마커의 기본 아이콘 저장 (한 번만)
+              if (!marker._defaultIcon) {
+                marker._defaultIcon = marker.options.icon;
+              }
+
+              // 현재 마커 강조
+              marker.setIcon(selectedIcon);
+              lastClickedMarker = marker;
+            });
+
+
+            // ✅ 검색/색변화는 새 마커 인덱스로만
+            gpxNewWptIndex.push({
+              name,
+              marker,
+              gpxId: url   // ⭐ 이 WPT의 소속 GPX
+            });
+          });
+
+
+           console.log("[GPX]", url, "wpt indexed:", gpxWptIndex.length);
+           console.log("sample:", gpxWptIndex.slice(0, 5).map(x => x.name));
+
+        })
+        .catch(() => {
+          // fetch 실패해도 기존 기능 유지 (조용히 무시)
+        });
+
+      // console.log("GPX WPT index:", gpxWptIndex.length, gpxWptIndex.slice(0, 20));
+    })
+    /* ✅✅ 여기까지 교체 */
+
+    .on("error", function () {
+      console.warn("GPX 로드 실패:", url);
+    })
+    .addTo(gpxLayerGroup);
+  });
+
+
+  // ✅ 이건 forEach 밖에서 실행돼야 함
+  map.on("click", e=>{
+    if(searchMode) return;
+    lastClickedCoord = `${e.latlng.lat.toFixed(6)},${e.latlng.lng.toFixed(6)}`;
+    document.getElementById("clickedCoords").innerText = `📍 클릭 좌표: ${lastClickedCoord}`;
+    if(window.lastClickMarker) markerCluster.removeLayer(window.lastClickMarker);
+    window.lastClickMarker = L.marker(e.latlng, {
+      icon: L.icon({
+        iconUrl:"https://maps.google.com/mapfiles/ms/icons/orange-dot.png",
+        iconSize:[32,32]
+      })
+    }).addTo(markerCluster);
+  });
+}
+
+function clearMarkers(){ markerCluster.clearLayers(); markers=[]; }
+
+function addMarker(id, pos, color){
+  const defaultIcon = L.icon({
+    iconUrl: `https://maps.google.com/mapfiles/ms/icons/${color}-dot.png`,
+    iconSize: [32, 32]
+  });
+  const clickedIcon = L.icon({
+    iconUrl: `https://maps.google.com/mapfiles/ms/icons/red-dot.png`,
+    iconSize: [32, 32]
+  });
+
+  const m = L.marker([pos.lat, pos.lng], { icon: defaultIcon });
+  m.bindPopup(`<strong>${lampData[id].고유이름}</strong><br/><b>분류:</b> ${lampData[id].분류}<br/><b>전화번호:</b> ${lampData[id].전화번호}<br/><b>주소:</b> ${lampData[id].주소}<br/><b>특이사항:</b> ${lampData[id].특이사항}`);
+
+  m.on("click", () => {
+    // 클릭된 마커 색상 변경
+    m.setIcon(clickedIcon);
+
+    // 이전 클릭 마커가 있으면 원래 색으로 복원
+    if (lastClickedMarker && lastClickedMarker !== m) {
+      lastClickedMarker.setIcon(defaultIcon);
+    }
+    lastClickedMarker = m;
+
+    // 클릭 좌표 업데이트
+    lastClickedCoord = lampData[id].좌표;
+    document.getElementById("clickedCoords").innerText = `📍 선택: ${lastClickedCoord}`;
+  });
+
+  markerCluster.addLayer(m);
+  markers.push(m);
+}
+
+// 클릭 좌표 → 카카오맵 URL 복사
+document.getElementById("copyRouteBtn").addEventListener("click",()=>{
+  if(!lastClickedCoord){ alert("⚠️ 먼저 지도를 클릭하세요."); return; }
+  const [lat,lng]=lastClickedCoord.split(",");
+  const kakaoWebUrl=`https://map.kakao.com/link/to/${encodeURIComponent("선택위치")},${lat},${lng}`;
+  navigator.clipboard.writeText(kakaoWebUrl)
+    .then(()=>alert("✅ 링크가 복사되었습니다.\n다른 사람에게 보내면 해당 위치 길찾기 가능"))
+    .catch(()=>alert("❌ 클립보드 복사 실패"));
+});
+
+function normalizeSimple(str){
+  return (str||"")
+    .toLowerCase()
+    // ✅ 숫자/영문/한글만 남기고 나머지는 전부 제거 (ㅡ 포함)
+    .replace(/[^0-9a-z가-힣ㄱ-ㅎㅏ-ㅣ]/g,"");
+}
+
+/* ===== 여기부터 추가 ===== */
+function resetGpxWptHighlight() {
+  gpxNewWptLayerGroup.clearLayers();
+  highlightedGpxWpts = [];
+}
+
+function highlightGpxWptsByKeyword(keyword) {
+  gpxNewWptLayerGroup.clearLayers();
+  highlightedGpxWpts = [];
+
+  if (!keyword) return;
+
+  const kw = normalizeSimple(keyword);
+  if (kw.length < 2) return;
+
+  const kwRegex = new RegExp(kw.split("").join(".*"), "i");
+
+  const redIcon = L.icon({
+    iconUrl: "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
+    iconSize: [32, 32]
+  });
+
+  const blueIcon = L.icon({
+    iconUrl: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png",
+    iconSize: [32, 32]
+  });
+
+  // ✅ 1) 검색어와 직접 매칭된 GPX ID 찾기
+  const matchedGpxIds = new Set();
+  gpxNewWptIndex.forEach(({ name, gpxId }) => {
+    if (kwRegex.test(normalizeSimple(name))) {
+      matchedGpxIds.add(gpxId);
+    }
+  });
+
+  if (matchedGpxIds.size === 0) return;
+
+  // ✅ 2) 해당 GPX의 모든 WPT 표시
+  gpxNewWptIndex.forEach(({ name, marker, gpxId }) => {
+    if (!matchedGpxIds.has(gpxId)) return;
+
+    if (kwRegex.test(normalizeSimple(name))) {
+      marker.setIcon(redIcon);   // 🔴 검색된 WPT
+    } else {
+      marker.setIcon(blueIcon);  // 🔵 같은 GPX의 다른 WPT
+    }
+
+    marker.addTo(gpxNewWptLayerGroup);
+    highlightedGpxWpts.push(marker);
+  });
+}
+
+function searchAndShow() {
+  const kw = document.getElementById("keyword").value.trim();
+  if (!kw) { alert("⚠️ 키워드 입력하세요."); return; }
+
+  highlightGpxWptsByKeyword(kw);
+  
+  searchMode = true;
+  clearMarkers();
+
+  const kwNormalized = normalizeSimple(kw);
+  if(kwNormalized.length<2){ alert("⚠️ 최소 2글자 이상 입력"); return; }
+  const kwRegex = new RegExp(kwNormalized.split("").join(".*"), "i");
+
+  const res = Object.keys(lampData).filter(id=>{
+    const d = lampData[id];
+    const fields = [d.고유이름,d.전화번호,d.주소,d.분류,d.특이사항];
+    return fields.some(f=>kwRegex.test(normalizeSimple(f)));
+  }).map(id=>({id,pos:parseCoords(lampData[id].좌표)}));
+
+  if (res.length === 0) {
+    if (highlightedGpxWpts.length > 0) {
+      const bounds = L.latLngBounds();
+      highlightedGpxWpts.forEach(m => {
+        if (m.getLatLng) bounds.extend(m.getLatLng());
+      });
+      if (bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [30, 30] });
+      }
+      return;
+    }
+    alert("❌ 검색 결과 없음");
+    return;
+  }
+
+  const bounds = L.latLngBounds();
+  res.forEach(r=>{ addMarker(r.id,r.pos,"blue"); bounds.extend([r.pos.lat,r.pos.lng]); });
+  map.fitBounds(bounds);
+}
+
+function resetSearch(){ searchMode=false; clearMarkers(); document.getElementById("keyword").value=""; lastClickedCoord=""; document.getElementById("clickedCoords").innerText="📍"; resetGpxWptHighlight(); }
+
+function navigateToPatrol() {
+  if (!lastClickedCoord) {
+    alert("⚠️ 먼저 지도를 클릭하여 목적지를 선택하세요.");
+    return;
+  }
+  const [destLat, destLng] = lastClickedCoord.split(",");
+
+  // 지도 표시 URL (앱 설치 시 카카오맵 앱으로, 미설치 시 웹으로 열림)
+  const mapUrl = `https://map.kakao.com/link/map/선택위치,${destLat},${destLng}`;
+
+  if (/Android|iPhone|iPad/i.test(navigator.userAgent)) {
+    // 모바일 환경 → 지도 표시 URL 우선 열기
+    window.location.href = mapUrl;
+  } else {
+    // PC 환경 → 새 탭에서 지도 표시
+    window.open(mapUrl, "_blank");
+  }
+}
+
+
+function completePatrol(){
+  if(!activePatrol){ return; }
+
+  completedPatrols.add(activePatrol.key);
+  localStorage.setItem(
+    "patrol_" + new Date().toISOString().slice(0,10),
+    JSON.stringify([...completedPatrols])
+  );
+
+  const patrolId = activePatrol.task.id;
+  const data = lampData[patrolId];
+  const now = new Date();
+
+  // ✅ 오늘 00:01 이후인지 검사
+  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 1, 0);
+  if(now < todayMidnight){ 
+    // 아직 오늘 00:01 전이면 기록 안 함
+    return; 
+  }
+
+  const patrolTime = now.toLocaleString("ko-KR");
+  const logLine = `아이디: ${patrolId}, 순찰시간: ${patrolTime}, 고유이름: ${data?.고유이름||"이름 없음"}, 주소: ${data?.주소||"주소 없음"}\n`;
+
+  const todayKey = "patrol_text_log_" + now.toISOString().slice(0,10);
+  const existingLog = localStorage.getItem(todayKey) || "";
+  const newLog = existingLog + logLine;
+  localStorage.setItem(todayKey, newLog);
+
+  // 오래된 로그 삭제
+  const today = new Date();
+  const keysToDelete = [];
+  for (let i = 0; i < localStorage.length; i++){
+    const key = localStorage.key(i);
+    if (key.startsWith("patrol_text_log_")){
+      const dateStr = key.replace("patrol_text_log_","");
+      const logDate = new Date(dateStr);
+      if ((today - logDate) / (1000*60*60*24) > 1){
+        keysToDelete.push(key);
+      }
+    }
+  }
+  keysToDelete.forEach(k => localStorage.removeItem(k));
+
+  activePatrol = null;
+  showUpcomingPatrols();
+}
+
+// 📋 로그 뷰어 ON/OFF
+function toggleLogViewer(){
+  const logContent=document.getElementById("logContent");
+  if(logContent.style.display==="none" || logContent.style.display===""){
+    const todayKey="patrol_text_log_" + new Date().toISOString().slice(0,10);
+    const allLogs = localStorage.getItem(todayKey) || "";
+
+    // ✅ 오늘 날짜 문자열만 필터링
+    const todayDateStr = new Date().toLocaleDateString("ko-KR"); 
+    const filteredLogs = allLogs
+      .split("\n")
+      .filter(line => line.includes(todayDateStr))
+      .join("\n");
+
+    logContent.value = filteredLogs;
+    logContent.style.display="block";
+  } else {
+    logContent.style.display="none";
+  }
+}
+
+document.addEventListener("DOMContentLoaded", ()=>{
+  // 처음에는 textarea 닫힘 상태 유지
+  document.getElementById("upcomingPanel").addEventListener("click",e=>{
+    if(e.target.tagName.toLowerCase()!=="li") e.currentTarget.classList.toggle("hidden");
+  });
+  initMap(); 
+  updatePatrolDisplay();
+});
+</script>
+</body>
+</html>
+
+
